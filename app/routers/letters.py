@@ -7,11 +7,12 @@ CRUD endpoints for dispute letters: view, edit, export as PDF.
 import io
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.models.schemas import LetterResponse, LetterStatus, LetterUpdateRequest
 from app.models.database import get_supabase
+from app.services.auth import get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ router = APIRouter(prefix="/api/letters", tags=["letters"])
 
 
 @router.get("/{letter_id}", response_model=LetterResponse)
-async def get_letter(letter_id: str):
+async def get_letter(letter_id: str, user_id: str = Depends(get_current_user)):
     """Get a specific dispute letter by ID."""
     supabase = get_supabase()
     result = (
@@ -37,7 +38,7 @@ async def get_letter(letter_id: str):
 
 
 @router.put("/{letter_id}", response_model=LetterResponse)
-async def update_letter(letter_id: str, update: LetterUpdateRequest):
+async def update_letter(letter_id: str, update: LetterUpdateRequest, user_id: str = Depends(get_current_user)):
     """Update a letter's content (user edits in the previewer)."""
     supabase = get_supabase()
 
@@ -72,7 +73,7 @@ async def update_letter(letter_id: str, update: LetterUpdateRequest):
 
 
 @router.get("/{letter_id}/pdf")
-async def export_letter_pdf(letter_id: str):
+async def export_letter_pdf(letter_id: str, user_id: str = Depends(get_current_user)):
     """Export a dispute letter as a PDF file."""
     supabase = get_supabase()
     result = (

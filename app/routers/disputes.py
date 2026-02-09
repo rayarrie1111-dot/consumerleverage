@@ -6,7 +6,9 @@ API endpoints for running the AI dispute engine and managing results.
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+
+from app.services.auth import get_current_user
 
 from app.models.schemas import (
     Account,
@@ -27,7 +29,10 @@ router = APIRouter(prefix="/api/disputes", tags=["disputes"])
 
 
 @router.post("/analyze", response_model=AnalyzeResponse)
-async def analyze_disputes(request: AnalyzeRequest):
+async def analyze_disputes(
+    request: AnalyzeRequest,
+    user_id: str = Depends(get_current_user),
+):
     """
     Run the full AI dispute pipeline on selected accounts.
 
@@ -41,7 +46,7 @@ async def analyze_disputes(request: AnalyzeRequest):
 
     # Create dispute record
     dispute = supabase.table("disputes").insert({
-        "user_id": None,  # TODO: wire in auth
+        "user_id": user_id,
         "status": DisputeStatus.ANALYZING.value,
     }).execute()
 
@@ -119,6 +124,9 @@ async def analyze_disputes(request: AnalyzeRequest):
                     "account_id": account.id,
                     "violation_type": violation.violation_type,
                     "fcra_section": violation.fcra_section,
+                    "universal_truth": violation.universal_truth,
+                    "data_point": violation.data_point,
+                    "description": violation.description,
                     "citation_text": violation.citation_text,
                     "verified": violation.verified,
                     "ai_confidence": violation.confidence,
@@ -150,7 +158,10 @@ async def analyze_disputes(request: AnalyzeRequest):
 
 
 @router.get("/status/{dispute_id}")
-async def get_dispute_status(dispute_id: str):
+async def get_dispute_status(
+    dispute_id: str,
+    user_id: str = Depends(get_current_user),
+):
     """Get the current status of a dispute and its results."""
     supabase = get_supabase()
 

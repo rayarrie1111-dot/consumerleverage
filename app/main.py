@@ -10,7 +10,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import disputes, letters
+from app.routers import disputes, letters, reports
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,6 +36,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(reports.router)
 app.include_router(disputes.router)
 app.include_router(letters.router)
 
