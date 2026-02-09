@@ -1,0 +1,79 @@
+{
+  "name": "Dispute Ready → Email Notification",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "dispute-ready",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook: Dispute Ready",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://localhost:8000/api/webhooks/dispute-summary/{{ $json.body.dispute_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Webhook-Secret",
+              "value": "={{ $env.WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-summary",
+      "name": "Fetch Dispute Summary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [470, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@consumerleverage.com",
+        "toEmail": "={{ $json.user.email }}",
+        "subject": "Your Credit Dispute Analysis is Ready",
+        "html": "=<h2>Hi {{ $json.user.full_name }},</h2><p>Your dispute analysis is complete.</p><p><strong>Results:</strong></p><ul><li>Violations found: {{ $json.violations.length }}</li><li>Dispute letters generated: {{ $json.letters.length }}</li></ul><p>Log in to review your letters and approve them for sending.</p><p><a href=\"https://app.consumerleverage.com/disputes/{{ $json.dispute.id }}\">Review Your Dispute →</a></p>",
+        "options": {}
+      },
+      "id": "send-email",
+      "name": "Send Email: Dispute Ready",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [690, 300]
+    }
+  ],
+  "connections": {
+    "Webhook: Dispute Ready": {
+      "main": [
+        [
+          {
+            "node": "Fetch Dispute Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Dispute Summary": {
+      "main": [
+        [
+          {
+            "node": "Send Email: Dispute Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

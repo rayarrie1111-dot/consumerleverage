@@ -23,5 +23,9 @@ class Settings:
     CHUNK_MAX_TOKENS: int = int(os.getenv("CHUNK_MAX_TOKENS", "500"))
     CHUNK_OVERLAP_TOKENS: int = int(os.getenv("CHUNK_OVERLAP_TOKENS", "50"))
 
+    # Webhook / n8n config
+    WEBHOOK_SECRET: str = os.getenv("WEBHOOK_SECRET", "")
+    N8N_BASE_URL: str = os.getenv("N8N_BASE_URL", "http://localhost:5678")
+
 
 settings = Settings()

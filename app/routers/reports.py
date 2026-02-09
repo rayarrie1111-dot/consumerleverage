@@ -12,6 +12,7 @@ from app.models.schemas import Account, Bureau
 from app.models.database import get_supabase
 from app.services.auth import get_current_user
 from app.services.pdf_parser import parse_credit_report
+from app.services.n8n_events import emit_report_uploaded
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,14 @@ async def upload_report(
             "status": "failed",
         }).eq("id", report_id).execute()
         raise HTTPException(status_code=422, detail=f"Failed to parse credit report: {str(e)}")
+
+    # Notify n8n that a report was uploaded and parsed
+    await emit_report_uploaded(
+        report_id=report_id,
+        user_id=user_id,
+        bureau=bureau.value,
+        accounts_count=len(stored_accounts),
+    )
 
     return {
         "report_id": report_id,

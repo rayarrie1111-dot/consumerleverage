@@ -22,6 +22,7 @@ from app.models.schemas import (
 from app.models.database import get_supabase
 from app.services.ai_engine import CreditRepairEngine
 from app.services.universal_truths import run_universal_truths_check, check_single_bureau
+from app.services.n8n_events import emit_dispute_ready
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +148,15 @@ async def analyze_disputes(
     supabase.table("disputes").update({
         "status": final_status.value,
     }).eq("id", dispute_id).execute()
+
+    # Notify n8n that dispute analysis is complete
+    if total_letters > 0:
+        await emit_dispute_ready(
+            dispute_id=dispute_id,
+            user_id=user_id,
+            total_violations=total_violations,
+            total_letters=total_letters,
+        )
 
     return AnalyzeResponse(
         dispute_id=dispute_id,

@@ -1,0 +1,167 @@
+{
+  "name": "30-Day Bureau Response Tracker",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * *"
+            }
+          ]
+        }
+      },
+      "id": "daily-cron",
+      "name": "Daily at 9 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://localhost:8000/api/webhooks/overdue-disputes?days=30",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Webhook-Secret",
+              "value": "={{ $env.WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-overdue",
+      "name": "Fetch Overdue Disputes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [470, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.count }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "check-any",
+      "name": "Any Overdue?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "overdue_disputes",
+        "options": {}
+      },
+      "id": "split-disputes",
+      "name": "Split Disputes",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [910, 200]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://localhost:8000/api/webhooks/dispute-summary/{{ $json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Webhook-Secret",
+              "value": "={{ $env.WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-detail",
+      "name": "Fetch Dispute Detail",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1130, 200]
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@consumerleverage.com",
+        "toEmail": "={{ $json.user.email }}",
+        "subject": "Action Required: Bureau Has Not Responded to Your Dispute",
+        "html": "=<h2>Hi {{ $json.user.full_name }},</h2><p>It has been <strong>30+ days</strong> since your dispute was sent, and the credit bureau has not responded.</p><p>Under the FCRA (15 U.S.C. § 1681i), credit bureaus must complete their investigation within 30 days. Their failure to respond may be a violation of your rights.</p><h3>Your Options:</h3><ol><li><strong>File a complaint</strong> with the Consumer Financial Protection Bureau (CFPB)</li><li><strong>Send a follow-up letter</strong> citing the bureau's failure to investigate</li><li><strong>Consult an attorney</strong> about potential FCRA violations</li></ol><p><a href=\"https://app.consumerleverage.com/disputes/{{ $json.dispute.id }}\">View Your Dispute →</a></p>",
+        "options": {}
+      },
+      "id": "send-reminder",
+      "name": "Send Overdue Reminder",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1350, 200]
+    }
+  ],
+  "connections": {
+    "Daily at 9 AM": {
+      "main": [
+        [
+          {
+            "node": "Fetch Overdue Disputes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Overdue Disputes": {
+      "main": [
+        [
+          {
+            "node": "Any Overdue?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Overdue?": {
+      "main": [
+        [
+          {
+            "node": "Split Disputes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Disputes": {
+      "main": [
+        [
+          {
+            "node": "Fetch Dispute Detail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Dispute Detail": {
+      "main": [
+        [
+          {
+            "node": "Send Overdue Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
