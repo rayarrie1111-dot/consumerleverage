@@ -36,6 +36,11 @@ from app.services.citation_verifier import (
     filter_verified_only,
     verification_summary,
 )
+from app.services.universal_truths import (
+    check_single_bureau,
+    format_flags_for_prompt,
+    UniversalTruthFlag,
+)
 from app.models.database import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -77,28 +82,44 @@ def _log_audit(entry: AuditEntry) -> None:
 
 # ─── System prompts ──────────────────────────────────────────────
 
-STEP_A_SYSTEM = """You are a credit report analyst specializing in FCRA (Fair Credit Reporting Act) violations.
+STEP_A_SYSTEM = """You are a Senior FCRA Compliance Auditor. Your sole objective is to identify discrepancies in a consumer's credit report by cross-referencing account data against the "Universal Truths" of the Fair Credit Reporting Act.
 
-Your task: Analyze the provided account data and identify ALL potential FCRA violations.
+THE UNIVERSAL TRUTHS:
+
+1. ACCURACY (15 U.S.C. § 1681e(b)):
+   Every data point — balance, date, status, payment history — must be 100% correct across all bureaus. Any discrepancy is a potential violation.
+
+2. COMPLETENESS (15 U.S.C. § 1681e(b), § 1681i):
+   No required fields should be missing or logically inconsistent. A credit report that omits material information is incomplete and therefore inaccurate.
+
+3. VERIFIABILITY (15 U.S.C. § 1681i, Section 611):
+   If a furnisher cannot prove the data is correct with documentation, it must be deleted. Missing original creditor on a collection account, missing account numbers, and absent payment histories all fail the verifiability test.
+
+YOUR TASK:
+Analyze the provided account_data and the fcra_context (RAG chunks). Identify every technical violation. Cross-reference any pre-identified discrepancies provided below with the FCRA reference material to determine which statutory sections apply.
 
 CRITICAL RULES:
-- ONLY identify violations that are supported by the FCRA reference material provided below.
-- If no violation exists for this account, return {{"violations": []}}.
-- Do NOT infer, assume, or fabricate violations not found in the reference text.
+- ONLY cite violations supported by the FCRA reference material provided below.
+- If no violation exists, return {{"violations": []}}.
 - Do NOT use your general knowledge of FCRA — ONLY use the reference material below.
-- Each violation must include the specific FCRA section number.
+- Do NOT provide conversational filler. Output structured JSON only.
+- Tag each violation with which Universal Truth it falls under.
 
 Return ONLY valid JSON matching this exact schema:
 {{
   "violations": [
     {{
-      "violation_type": "category of violation (e.g. 'inaccurate reporting', 'obsolete information', 'failure to investigate')",
+      "violation_type": "category (e.g. 'inaccurate reporting', 'incomplete data', 'unverifiable account', 'obsolete information', 'failure to investigate')",
       "fcra_section": "15 U.S.C. § XXXX",
-      "description": "plain language explanation of how this account violates the cited section",
+      "universal_truth": "accuracy | completeness | verifiability",
+      "data_point": "the specific field that triggered this violation (e.g. 'balance', 'date_opened', 'original_creditor')",
+      "description": "plain language explanation of the violation, referencing the specific data discrepancy",
       "confidence": 0.0 to 1.0
     }}
   ]
 }}
+
+{universal_truths_flags}
 
 FCRA REFERENCE MATERIAL:
 {fcra_context}"""
@@ -175,9 +196,17 @@ class CreditRepairEngine:
         self,
         account: Account,
         bureau: Bureau,
+        universal_truths_flags: list[UniversalTruthFlag] | None = None,
     ) -> DisputeResult:
         """
         Run the full 3-step pipeline for a single account and bureau.
+
+        Args:
+            account: The parsed credit report account data.
+            bureau: Which bureau to address the dispute to.
+            universal_truths_flags: Pre-computed flags from the cross-bureau
+                Universal Truths checker. If None, single-bureau checks run
+                automatically inside Step A.
 
         Returns a DisputeResult with violations, letter, and audit metadata.
         """
@@ -187,8 +216,8 @@ class CreditRepairEngine:
         )
 
         try:
-            # ── Step A: Identify violations ──
-            step_a = await self._step_a_identify(account)
+            # ── Step A: Identify violations (with Universal Truths context) ──
+            step_a = await self._step_a_identify(account, universal_truths_flags)
             result.steps_completed.append("identify")
 
             if not step_a.violations:
@@ -227,16 +256,50 @@ class CreditRepairEngine:
 
     # ─── Step A: Violation Identification ─────────────────────────
 
-    async def _step_a_identify(self, account: Account) -> StepAOutput:
-        """Identify potential FCRA violations for an account."""
+    async def _step_a_identify(
+        self,
+        account: Account,
+        precomputed_flags: list[UniversalTruthFlag] | None = None,
+    ) -> StepAOutput:
+        """
+        Identify potential FCRA violations for an account.
+
+        If precomputed_flags (from the Universal Truths checker) are provided,
+        they are injected into the system prompt as concrete evidence for the
+        auditor to cross-reference against FCRA statute.
+        """
         description = account.to_description()
 
+        # Run single-bureau Universal Truths checks if no flags provided
+        if precomputed_flags is None:
+            bureau_name = account.bureau.value if account.bureau else "unknown"
+            precomputed_flags = check_single_bureau([account], bureau_name)
+
+        # Filter flags relevant to this specific account
+        account_flags = [
+            f for f in precomputed_flags
+            if f.account_creditor.strip().lower() == account.creditor.strip().lower()
+        ]
+        truths_text = format_flags_for_prompt(account_flags)
+
         # RAG: retrieve relevant FCRA sections
-        chunks = await get_relevant_fcra_sections(description)
+        # Include Universal Truth findings in the RAG query for better section retrieval
+        rag_query = description
+        if account_flags:
+            truth_types = set(f.truth for f in account_flags)
+            rag_query += f" FCRA violations: {' '.join(truth_types)}"
+            # Add specific fields that failed checks for targeted retrieval
+            flagged_fields = set(f.field for f in account_flags)
+            rag_query += f" disputed fields: {' '.join(flagged_fields)}"
+
+        chunks = await get_relevant_fcra_sections(rag_query)
         fcra_context = format_context_for_prompt(chunks)
         sections_consulted = [c.section_number for c in chunks]
 
-        system_prompt = STEP_A_SYSTEM.format(fcra_context=fcra_context)
+        system_prompt = STEP_A_SYSTEM.format(
+            fcra_context=fcra_context,
+            universal_truths_flags=truths_text,
+        )
         user_prompt = (
             f"Analyze this credit report account for FCRA violations:\n\n"
             f"{json.dumps(account.model_dump(mode='json', exclude_none=True), indent=2)}"
@@ -273,6 +336,7 @@ class CreditRepairEngine:
             violations=violations,
             account_summary=description,
             fcra_sections_consulted=sections_consulted,
+            universal_truths_flags=account_flags,
         )
 
     # ─── Step B: Legal Citation Grounding ─────────────────────────

@@ -15,9 +15,11 @@ from app.models.schemas import (
     Bureau,
     DisputeResult,
     DisputeStatus,
+    UniversalTruthsReport,
 )
 from app.models.database import get_supabase
 from app.services.ai_engine import CreditRepairEngine
+from app.services.universal_truths import run_universal_truths_check, check_single_bureau
 
 logger = logging.getLogger(__name__)
 
@@ -59,14 +61,10 @@ async def analyze_disputes(request: AnalyzeRequest):
     if not accounts_query.data:
         raise HTTPException(status_code=404, detail="No accounts found for the given IDs")
 
-    # Run the engine
-    engine = CreditRepairEngine(dispute_id=dispute_id)
-    results: list[DisputeResult] = []
-    total_violations = 0
-    total_letters = 0
-
+    # Build Account objects and group by bureau for Universal Truths
+    parsed_accounts: list[Account] = []
     for account_row in accounts_query.data:
-        account = Account(
+        parsed_accounts.append(Account(
             id=account_row["id"],
             creditor=account_row["creditor"],
             account_number_partial=account_row.get("account_number_partial"),
@@ -76,10 +74,40 @@ async def analyze_disputes(request: AnalyzeRequest):
             date_reported=account_row.get("date_reported"),
             payment_history=account_row.get("payment_history"),
             remarks=account_row.get("remarks"),
-        )
+            original_creditor=account_row.get("original_creditor"),
+        ))
 
+    # ── Run Universal Truths cross-bureau check BEFORE the AI engine ──
+    # Group accounts by bureau from their source reports
+    accounts_by_bureau: dict[str, list[Account]] = {}
+    for bureau in request.bureaus:
+        accounts_by_bureau[bureau.value] = parsed_accounts  # same accounts, compared across bureaus
+
+    if len(request.bureaus) >= 2:
+        truths_report = run_universal_truths_check(accounts_by_bureau)
+        universal_flags = truths_report.flags
+        logger.info(
+            f"Universal Truths check: {truths_report.accuracy_flags} accuracy, "
+            f"{truths_report.completeness_flags} completeness, "
+            f"{truths_report.verifiability_flags} verifiability flags"
+        )
+    else:
+        universal_flags = check_single_bureau(
+            parsed_accounts, request.bureaus[0].value
+        )
+        logger.info(f"Single-bureau check: {len(universal_flags)} flags found")
+
+    # Run the engine
+    engine = CreditRepairEngine(dispute_id=dispute_id)
+    results: list[DisputeResult] = []
+    total_violations = 0
+    total_letters = 0
+
+    for account in parsed_accounts:
         for bureau in request.bureaus:
-            result = await engine.generate_dispute(account, bureau)
+            result = await engine.generate_dispute(
+                account, bureau, universal_truths_flags=universal_flags
+            )
             results.append(result)
 
             # Store violations in DB
@@ -88,7 +116,7 @@ async def analyze_disputes(request: AnalyzeRequest):
                     total_violations += 1
                 supabase.table("violations").insert({
                     "dispute_id": dispute_id,
-                    "account_id": account_row["id"],
+                    "account_id": account.id,
                     "violation_type": violation.violation_type,
                     "fcra_section": violation.fcra_section,
                     "citation_text": violation.citation_text,

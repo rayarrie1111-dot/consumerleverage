@@ -71,10 +71,34 @@ class Violation(BaseModel):
     violation_type: str = Field(description="Category: e.g. 'inaccurate reporting', 'obsolete data'")
     fcra_section: str = Field(description="e.g. '15 U.S.C. § 1681e(b)'")
     description: str = Field(description="Plain language explanation of the violation")
+    universal_truth: str | None = Field(default=None, description="Which truth failed: accuracy, completeness, or verifiability")
+    data_point: str | None = Field(default=None, description="The specific field that triggered the violation")
     citation_text: str | None = Field(default=None, description="Verbatim statutory text from FCRA")
     verified: bool = False
     flag: str | None = None
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+# ─── Universal Truths flags (pre-AI rule-based checks) ───────────
+
+class UniversalTruthFlag(BaseModel):
+    """A discrepancy found by the deterministic Universal Truths checker."""
+    truth: str = Field(description="accuracy | completeness | verifiability")
+    field: str = Field(description="The data field that failed the check")
+    account_creditor: str
+    bureau: Bureau | None = None
+    details: str = Field(description="Human-readable description of the discrepancy")
+    mismatched_values: dict | None = Field(default=None, description="Bureau → value for cross-bureau mismatches")
+
+
+class UniversalTruthsReport(BaseModel):
+    """Full report from the Universal Truths checker."""
+    flags: list[UniversalTruthFlag] = []
+    accounts_checked: int = 0
+    bureaus_compared: list[str] = []
+    accuracy_flags: int = 0
+    completeness_flags: int = 0
+    verifiability_flags: int = 0
 
 
 # ─── AI engine step outputs ──────────────────────────────────────
@@ -84,6 +108,7 @@ class StepAOutput(BaseModel):
     violations: list[Violation] = []
     account_summary: str = ""
     fcra_sections_consulted: list[str] = []
+    universal_truths_flags: list[UniversalTruthFlag] = []
 
 
 class StepBOutput(BaseModel):
